@@ -1,13 +1,26 @@
 {
     "cidades_suportadas": [
         "Recife",
-        "Belo Jardim"
+        "Belo Jardim",
+        "Jaqueira"
     ],
     "dados": {
         "mde": {
             "recife": "dados/mde_recife.tif",
             "belo-jardim": "dados/mde_belo-jardim.tif",
             "estado": "dados/mde_pernambuco_srtm.tif"
+        },
+        "camadas_extras_cidade": {
+            "jaqueira": [
+                {
+                    "nome": "Coleta Jaqueira",
+                    "caminho": "../COLETA_JAQUEIRA/COLETA_JAQUEIRA_PE.shp",
+                    "cor": "#ff7f11",
+                    "peso": 2,
+                    "opacidade": 0.85,
+                    "preenchimento": 0.2
+                }
+            ]
         }
     },
     "ui": {

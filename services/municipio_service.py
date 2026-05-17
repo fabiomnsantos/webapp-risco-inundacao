@@ -14,6 +14,78 @@ import numpy as np
 from utils.utils import load_config
 
 
+CAMADAS_EXTRAS_CIDADE_PADRAO = {
+    "jaqueira": [
+        {
+            "nome": "Coleta Jaqueira",
+            "caminho": "../COLETA_JAQUEIRA/COLETA_JAQUEIRA_PE.shp",
+            "cor": "#ff7f11",
+            "peso": 2,
+            "opacidade": 0.85,
+            "preenchimento": 0.2,
+        }
+    ]
+}
+
+
+def _obter_camadas_extras_cidade(config: dict | None) -> dict:
+    if not isinstance(config, dict):
+        return CAMADAS_EXTRAS_CIDADE_PADRAO
+
+    dados_cfg = config.get("dados") if isinstance(config.get("dados"), dict) else {}
+    camadas_cfg = dados_cfg.get("camadas_extras_cidade") if isinstance(dados_cfg, dict) else None
+    if not isinstance(camadas_cfg, dict):
+        return CAMADAS_EXTRAS_CIDADE_PADRAO
+
+    return camadas_cfg
+
+
+def _resolver_caminho_camada(caminho: str) -> Path:
+    p = Path(str(caminho)).expanduser()
+    if p.is_absolute():
+        return p
+
+    app_root = Path(__file__).resolve().parents[1]
+    candidatos = [
+        (app_root / p).resolve(),
+        (app_root.parent / p).resolve(),
+    ]
+
+    for c in candidatos:
+        if c.exists():
+            return c
+
+    return candidatos[0]
+
+
+def _preparar_geometrias_manchas(gdf: gpd.GeoDataFrame, camada_cfg: dict) -> gpd.GeoDataFrame:
+    """Garante que a camada extra seja renderizada como mancha (polígono)."""
+
+    if gdf.empty:
+        return gdf
+
+    geom_types = {str(t) for t in gdf.geometry.geom_type.dropna().unique()}
+    tipos_ponto = {"Point", "MultiPoint"}
+    tipos_linha = {"LineString", "MultiLineString"}
+
+    # Se já for polígono, mantém como está.
+    if geom_types & {"Polygon", "MultiPolygon"}:
+        return gdf
+
+    # Para pontos/linhas, cria buffer em metros para virar "mancha".
+    if geom_types.issubset(tipos_ponto | tipos_linha):
+        raio_m = float(camada_cfg.get("raio_manchas_m", 80.0))
+        if raio_m <= 0:
+            raio_m = 80.0
+
+        gdf_m = gdf.to_crs(epsg=31985)
+        gdf_m = gdf_m.copy()
+        gdf_m["geometry"] = gdf_m.geometry.buffer(raio_m)
+        gdf = gdf_m.to_crs(epsg=4326)
+
+    return gdf
+
+
 class MunicipioService:
     def __init__(self, municipios_path):
         self.municipios = gpd.read_file(municipios_path)
@@ -85,6 +157,45 @@ class MunicipioService:
                 'fillOpacity': 0
             }
         ).add_to(m)
+
+        # Camadas extras por cidade (configuráveis em static/config/config.json).
+        config = load_config() or {}
+        camadas_por_cidade = _obter_camadas_extras_cidade(config)
+        cidade_key = str(nome_cidade).strip().lower()
+        for camada in camadas_por_cidade.get(cidade_key, []):
+            caminho = camada.get("caminho") if isinstance(camada, dict) else None
+            if not isinstance(caminho, str) or not caminho.strip():
+                continue
+
+            shp_path = _resolver_caminho_camada(caminho)
+            if not shp_path.exists():
+                print(f"Camada extra não encontrada: {shp_path}")
+                continue
+
+            try:
+                gdf_extra = gpd.read_file(shp_path)
+                if gdf_extra.empty:
+                    continue
+                if gdf_extra.crs is None:
+                    gdf_extra = gdf_extra.set_crs(epsg=4326)
+                elif str(gdf_extra.crs).upper() != "EPSG:4326":
+                    gdf_extra = gdf_extra.to_crs(epsg=4326)
+
+                gdf_extra = _preparar_geometrias_manchas(gdf_extra, camada)
+
+                folium.GeoJson(
+                    gdf_extra,
+                    name=str(camada.get("nome") or shp_path.stem),
+                    style_function=lambda _x, _camada=camada: {
+                        "color": str(_camada.get("cor", "#ff7f11")),
+                        "weight": float(_camada.get("peso", 2)),
+                        "opacity": float(_camada.get("opacidade", 0.85)),
+                        "fillColor": str(_camada.get("cor", "#ff7f11")),
+                        "fillOpacity": float(_camada.get("preenchimento", 0.2)),
+                    },
+                ).add_to(m)
+            except Exception as e:
+                print(f"Erro ao carregar camada extra '{shp_path}': {e}")
 
         # Raster overlay
         with rasterio.open(raster_path) as src:
